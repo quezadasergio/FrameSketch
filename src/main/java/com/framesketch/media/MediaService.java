@@ -22,35 +22,39 @@ import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
- * VLCJ-backed media playback. Negative rates play a FFmpeg-generated reversed clip
- * so reverse motion stays smooth; {@link #timeMsProperty()} always reports original-timeline time.
+ * VLCJ-backed playback with FFmpeg reversed-clip cache for smooth reverse.
+ * Direction switches (M/N) share one time anchor; repeating the same mode is a no-op.
  */
 public class MediaService implements AutoCloseable {
 
     private final MediaPlayerFactory factory;
     private final EmbeddedMediaPlayer mediaPlayer;
-    private final FfmpegReverseService reverseService;
+    private final FfmpegProxyService proxyService;
     private final AtomicBoolean seeking = new AtomicBoolean(false);
+    private final AtomicBoolean switchingMedia = new AtomicBoolean(false);
     private final AtomicLong generation = new AtomicLong();
 
     private final BooleanProperty playing = new SimpleBooleanProperty(false);
     private final BooleanProperty mediaLoaded = new SimpleBooleanProperty(false);
     private final BooleanProperty muted = new SimpleBooleanProperty(false);
     private final BooleanProperty preparingReverse = new SimpleBooleanProperty(false);
-    /** Overlay spinner: only while user asked for reverse and cache is not ready yet. */
-    private final BooleanProperty awaitingReverseOverlay = new SimpleBooleanProperty(false);
-    private final AtomicBoolean switchingMedia = new AtomicBoolean(false);
+    private final BooleanProperty reverseBadgeVisible = new SimpleBooleanProperty(false);
+    private final StringProperty reverseBadgeText = new SimpleStringProperty("Preparando reversa…");
     private final LongProperty timeMs = new SimpleLongProperty(0);
     private final LongProperty lengthMs = new SimpleLongProperty(0);
     private final DoubleProperty rate = new SimpleDoubleProperty(1.0);
     private final IntegerProperty volume = new SimpleIntegerProperty(100);
     private final StringProperty statusMessage = new SimpleStringProperty("");
+    private final IntegerProperty playlistInfoEpoch = new SimpleIntegerProperty(0);
+    private long lastPlaylistInfoBumpMs;
 
     private Consumer<Void> onFinished = ignored -> {
     };
@@ -61,6 +65,8 @@ public class MediaService implements AutoCloseable {
     private boolean userWantsPlayback;
     private boolean pendingReverseActivation;
     private long originalLengthMs;
+    /** Shared anchor updated only when switching direction (M↔N or slow V↔B). */
+    private long directionSwitchAnchorMs = -1;
 
     public MediaService() {
         try {
@@ -69,13 +75,23 @@ public class MediaService implements AutoCloseable {
             }
             factory = new MediaPlayerFactory();
             mediaPlayer = factory.mediaPlayers().newEmbeddedMediaPlayer();
-            reverseService = new FfmpegReverseService();
+            proxyService = new FfmpegProxyService();
         } catch (IllegalStateException ex) {
             throw ex;
         } catch (Throwable ex) {
             throw new IllegalStateException(missingVlcMessage() + "\nDetalle: " + ex.getMessage(), ex);
         }
+
+        if (FfmpegProxyService.findFfmpeg().isEmpty()) {
+            statusMessage.set("FFmpeg no encontrado: conversión y reversa suave no estarán disponibles.");
+        }
+
         mediaPlayer.audio().setVolume(100);
+        wirePlayerEvents();
+        wireProxyListeners();
+    }
+
+    private void wirePlayerEvents() {
         mediaPlayer.events().addMediaPlayerEventListener(new MediaPlayerEventAdapter() {
             @Override
             public void playing(MediaPlayer player) {
@@ -83,7 +99,7 @@ public class MediaService implements AutoCloseable {
                     playing.set(true);
                     statusMessage.set(usingReversedMedia
                             ? String.format("Reversa %.2fx", rate.get())
-                            : "Reproduciendo");
+                            : String.format("Velocidad: %.2fx", Math.abs(rate.get())));
                 });
             }
 
@@ -119,7 +135,6 @@ public class MediaService implements AutoCloseable {
                     playing.set(false);
                     userWantsPlayback = false;
                     if (usingReversedMedia) {
-                        // End of reversed file == start of original timeline.
                         timeMs.set(0);
                         statusMessage.set("Inicio del video");
                     } else {
@@ -131,7 +146,7 @@ public class MediaService implements AutoCloseable {
 
             @Override
             public void timeChanged(MediaPlayer player, long newTime) {
-                if (seeking.get()) {
+                if (seeking.get() || switchingMedia.get()) {
                     return;
                 }
                 Platform.runLater(() -> timeMs.set(toOriginalTime(newTime)));
@@ -143,6 +158,9 @@ public class MediaService implements AutoCloseable {
                     if (!usingReversedMedia && newLength > 0) {
                         originalLengthMs = newLength;
                         lengthMs.set(newLength);
+                        if (originalFile != null) {
+                            proxyService.rememberDurationMs(originalFile.toPath(), newLength);
+                        }
                     } else if (usingReversedMedia && originalLengthMs <= 0 && newLength > 0) {
                         originalLengthMs = newLength;
                         lengthMs.set(newLength);
@@ -166,6 +184,64 @@ public class MediaService implements AutoCloseable {
         });
     }
 
+    private void wireProxyListeners() {
+        proxyService.setReverseProgressListener(progress -> Platform.runLater(() -> {
+            String name = progress.source().getFileName().toString();
+            showReverseBadge(name + "  " + progress.timeLabel());
+            if (originalFile != null
+                    && originalFile.toPath().toAbsolutePath().normalize().equals(progress.source())) {
+                preparingReverse.set(true);
+            }
+            bumpPlaylistInfo();
+        }));
+
+        proxyService.setReverseCompletedListener(result -> Platform.runLater(() -> {
+            if (result.kind() != FfmpegProxyService.ProxyKind.REVERSE) {
+                return;
+            }
+            Path source = result.source().toAbsolutePath().normalize();
+            boolean isCurrent = originalFile != null
+                    && originalFile.toPath().toAbsolutePath().normalize().equals(source);
+
+            if (isCurrent) {
+                reversedFile = result.proxyFile();
+                preparingReverse.set(false);
+                if (pendingReverseActivation) {
+                    boolean resume = userWantsPlayback || playing.get();
+                    pendingReverseActivation = false;
+                    hideReverseBadge();
+                    long anchor = directionSwitchAnchorMs >= 0
+                            ? directionSwitchAnchorMs
+                            : capturePlayerPlaybackMs();
+                    activateReversed(anchor, resume);
+                } else if (proxyService.activeReverseSource() == null) {
+                    hideReverseBadge();
+                }
+            } else if (proxyService.activeReverseSource() == null) {
+                hideReverseBadge();
+                preparingReverse.set(false);
+            }
+            bumpPlaylistInfo(true);
+        }));
+
+        proxyService.setReverseFailedListener(error -> Platform.runLater(() -> {
+            preparingReverse.set(false);
+            if (pendingReverseActivation) {
+                pendingReverseActivation = false;
+                if (rate.get() < 0) {
+                    rate.set(Math.abs(rate.get()));
+                }
+                statusMessage.set("No se pudo generar reversa: " + error.getMessage());
+            }
+            if (proxyService.activeReverseSource() == null) {
+                hideReverseBadge();
+            }
+            bumpPlaylistInfo(true);
+        }));
+
+        proxyService.setStatusChangedListener(ignored -> Platform.runLater(this::bumpPlaylistInfo));
+    }
+
     public void attachVideoSurface(ImageView imageView) {
         Objects.requireNonNull(imageView, "imageView");
         mediaPlayer.videoSurface().set(new ImageViewVideoSurface(imageView));
@@ -176,34 +252,95 @@ public class MediaService implements AutoCloseable {
         };
     }
 
+    public void enqueueReverseForFiles(Iterable<File> files) {
+        if (FfmpegProxyService.findFfmpeg().isEmpty()) {
+            return;
+        }
+        List<Path> paths = new ArrayList<>();
+        for (File file : files) {
+            if (file != null && file.isFile()) {
+                paths.add(file.toPath());
+            }
+        }
+        if (!paths.isEmpty()) {
+            proxyService.probeDurationsAsync(paths);
+            proxyService.enqueueReverseAll(paths);
+            showReverseBadge("Cola de reversa…");
+            bumpPlaylistInfo();
+        }
+    }
+
+    public String playlistTooltipFor(File file) {
+        if (file == null) {
+            return "";
+        }
+        FfmpegProxyService.FileStatus status = proxyService.statusFor(file.toPath());
+        String durationLine = status.durationMs().isPresent()
+                ? "Duración: " + formatClock(status.durationMs().getAsLong())
+                : "Duración: …";
+
+        String reverseLine = switch (status.reverseStatus()) {
+            case READY -> "Reversa: lista";
+            case RUNNING -> "Reversa: "
+                    + status.reverseProgressTime().orElse("time=00:00:00.00")
+                    + (status.durationMs().isPresent()
+                    ? " / " + formatClock(status.durationMs().getAsLong())
+                    : "");
+            case QUEUED -> "Reversa: en cola";
+            case FAILED -> "Reversa: error";
+            case PENDING -> "Reversa: pendiente";
+        };
+        return durationLine + "\n" + reverseLine;
+    }
+
+    public IntegerProperty playlistInfoEpochProperty() {
+        return playlistInfoEpoch;
+    }
+
     public boolean open(File file) {
         if (file == null || !file.isFile()) {
             statusMessage.set("Archivo inválido");
             return false;
         }
-        reverseService.cancelCurrent();
-        preparingReverse.set(false);
-        awaitingReverseOverlay.set(false);
         pendingReverseActivation = false;
-        switchingMedia.set(false);
-        long openGen = generation.incrementAndGet();
-        originalFile = file;
-        reversedFile = null;
         usingReversedMedia = false;
+        reversedFile = null;
         originalLengthMs = 0;
+        directionSwitchAnchorMs = -1;
+        long openGen = generation.incrementAndGet();
+
+        originalFile = file;
         userWantsPlayback = true;
+        mediaLoaded.set(false);
+        timeMs.set(0);
+        lengthMs.set(0);
+
+        if (rate.get() < 0) {
+            rate.set(1.0);
+        }
+
+        try {
+            if (proxyService.hasValidCache(file.toPath(), FfmpegProxyService.ProxyKind.REVERSE)) {
+                reversedFile = proxyService.cacheFileFor(file.toPath(), FfmpegProxyService.ProxyKind.REVERSE);
+                preparingReverse.set(false);
+                hideReverseBadge();
+            } else {
+                preparingReverse.set(true);
+                showReverseBadge("Preparando reversa…");
+                proxyService.enqueueReverse(file.toPath(), true);
+            }
+        } catch (IOException ex) {
+            preparingReverse.set(false);
+        }
 
         boolean ok = mediaPlayer.media().play(file.getAbsolutePath());
         mediaLoaded.set(ok);
         if (ok) {
-            double desired = rate.get() < 0 ? 1.0 : rate.get();
-            rate.set(desired);
-            mediaPlayer.controls().setRate((float) Math.abs(desired));
+            mediaPlayer.controls().setRate((float) Math.abs(rate.get()));
             mediaPlayer.audio().setVolume(volume.get());
             mediaPlayer.audio().setMute(muted.get());
             statusMessage.set("Cargado: " + file.getName());
-            // Prefetch reverse in background; forward playback continues.
-            startReversePrefetch(openGen);
+            bumpPlaylistInfo(true);
         } else {
             userWantsPlayback = false;
             statusMessage.set("No se pudo abrir: " + file.getName());
@@ -213,21 +350,24 @@ public class MediaService implements AutoCloseable {
 
     public void play() {
         userWantsPlayback = true;
-        if (rate.get() < 0) {
-            requestReversedPlayback(true);
+        if (usingReversedMedia || rate.get() < 0) {
+            if (!usingReversedMedia) {
+                switchToReversePlayback();
+                return;
+            }
+            mediaPlayer.controls().setRate((float) Math.abs(rate.get()));
+            mediaPlayer.controls().play();
+            playing.set(true);
             return;
         }
-        switchToOriginalIfNeeded(timeMs.get(), true);
         mediaPlayer.controls().setRate((float) Math.abs(rate.get()));
         mediaPlayer.controls().play();
         playing.set(true);
-        statusMessage.set("Reproduciendo");
+        statusMessage.set(String.format("Velocidad: %.2fx", Math.abs(rate.get())));
     }
 
     public void pause() {
         userWantsPlayback = false;
-        pendingReverseActivation = false;
-        awaitingReverseOverlay.set(false);
         mediaPlayer.controls().pause();
         playing.set(false);
         statusMessage.set("Pausa");
@@ -244,11 +384,12 @@ public class MediaService implements AutoCloseable {
     public void stop() {
         userWantsPlayback = false;
         pendingReverseActivation = false;
-        awaitingReverseOverlay.set(false);
-        // Keep reverse prefetch running so cache is ready; only cancel on new open.
-        switchToOriginalIfNeeded(0, false);
-        mediaPlayer.controls().stop();
-        seek(0);
+        if (usingReversedMedia) {
+            switchToOriginalKeepingTime(0, false);
+        } else {
+            mediaPlayer.controls().stop();
+            seek(0);
+        }
         playing.set(false);
         timeMs.set(0);
         statusMessage.set("Detenido");
@@ -260,160 +401,175 @@ public class MediaService implements AutoCloseable {
     }
 
     public void seek(long originalMillis) {
-        long length = Math.max(originalLengthMs, lengthMs.get());
+        long length = originalTimelineLength();
         long clamped = Math.max(0, length > 0 ? Math.min(originalMillis, length) : originalMillis);
         seeking.set(true);
-        long mediaTime = toMediaTime(clamped);
-        mediaPlayer.controls().setTime(mediaTime);
         timeMs.set(clamped);
+        mediaPlayer.controls().setTime(toMediaTime(clamped));
         seeking.set(false);
     }
 
-    /**
-     * Applies playback rate immediately. Negative values use the cached FFmpeg-reversed clip.
-     * Timeline stays in original time: media seeks to {@code length - t}.
-     */
-    public void setRate(double newRate) {
-        double clamped = sanitizeRate(newRate);
-        double previous = rate.get();
-        rate.set(clamped);
-
-        boolean resume = userWantsPlayback || playing.get();
-        if (clamped < 0) {
-            if (previous >= 0 || !usingReversedMedia) {
-                requestReversedPlayback(resume);
-            } else {
-                mediaPlayer.controls().setRate((float) Math.abs(clamped));
-                if (resume) {
-                    userWantsPlayback = true;
-                    mediaPlayer.controls().play();
-                    playing.set(true);
-                }
-                statusMessage.set(String.format("Reversa %.2fx", clamped));
-            }
-            return;
-        }
-
-        pendingReverseActivation = false;
-        awaitingReverseOverlay.set(false);
-        long at = timeMs.get();
-        switchToOriginalIfNeeded(at, resume);
-        applyPositiveRate(clamped, resume);
-    }
-
-    /**
-     * Starts (or reuses) reverse-cache generation without interrupting forward playback.
-     */
-    private void startReversePrefetch(long requestId) {
-        if (originalFile == null) {
-            return;
-        }
-        if (FfmpegReverseService.findFfmpeg().isEmpty()) {
-            statusMessage.set("FFmpeg no encontrado: la reversa suave no estará disponible.");
-            return;
-        }
-
-        try {
-            if (reverseService.hasValidCache(originalFile.toPath())) {
-                reversedFile = reverseService.cacheFileFor(originalFile.toPath());
-                preparingReverse.set(false);
-                awaitingReverseOverlay.set(false);
-                statusMessage.set("Reversa en caché lista");
-                if (pendingReverseActivation || rate.get() < 0) {
-                    activateReversed(reversedFile, timeMs.get(), userWantsPlayback || playing.get());
-                    pendingReverseActivation = false;
-                }
-                return;
-            }
-        } catch (IOException ignored) {
-            // Build below.
-        }
-
-        preparingReverse.set(true);
-        // Overlay stays hidden unless the user already requested reverse.
-        statusMessage.set("Preparando reversa en segundo plano...");
-
-        reverseService.prepareAsync(
-                originalFile.toPath(),
-                msg -> Platform.runLater(() -> {
-                    if (requestId == generation.get() && preparingReverse.get()) {
-                        statusMessage.set(msg);
-                    }
-                }),
-                result -> Platform.runLater(() -> {
-                    if (requestId != generation.get()) {
-                        return;
-                    }
-                    preparingReverse.set(false);
-                    reversedFile = result.reversedFile();
-                    if (pendingReverseActivation || rate.get() < 0) {
-                        boolean resume = pendingReverseActivation || userWantsPlayback || playing.get();
-                        pendingReverseActivation = false;
-                        awaitingReverseOverlay.set(false);
-                        activateReversed(reversedFile, timeMs.get(), resume);
-                    } else {
-                        awaitingReverseOverlay.set(false);
-                        statusMessage.set("Reversa en caché lista");
-                    }
-                }),
-                error -> Platform.runLater(() -> {
-                    if (requestId != generation.get()) {
-                        return;
-                    }
-                    preparingReverse.set(false);
-                    pendingReverseActivation = false;
-                    awaitingReverseOverlay.set(false);
-                    statusMessage.set("No se pudo generar reversa: " + error.getMessage());
-                    if (rate.get() < 0) {
-                        rate.set(Math.abs(rate.get()));
-                    }
-                })
-        );
-    }
-
-    private void requestReversedPlayback(boolean resumePlayback) {
+    public void switchToReversePlayback() {
         if (originalFile == null) {
             statusMessage.set("No hay video cargado");
             return;
         }
-        if (FfmpegReverseService.findFfmpeg().isEmpty()) {
+        if (usingReversedMedia || pendingReverseActivation) {
+            return;
+        }
+        long savedMs = capturePlayerPlaybackMs();
+        directionSwitchAnchorMs = savedMs;
+        timeMs.set(savedMs);
+        rate.set(-1.0);
+        userWantsPlayback = true;
+        requestReversedPlayback(true, savedMs);
+    }
+
+    public void switchToForwardPlayback() {
+        if (originalFile == null) {
+            statusMessage.set("No hay video cargado");
+            return;
+        }
+        if (!usingReversedMedia) {
+            if (pendingReverseActivation) {
+                pendingReverseActivation = false;
+                if (rate.get() < 0) {
+                    rate.set(1.0);
+                }
+                if (!preparingReverse.get()) {
+                    hideReverseBadge();
+                }
+            }
+            return;
+        }
+        long savedMs = capturePlayerPlaybackMs();
+        directionSwitchAnchorMs = savedMs;
+        timeMs.set(savedMs);
+        pendingReverseActivation = false;
+        rate.set(1.0);
+        userWantsPlayback = true;
+        switchToOriginalKeepingTime(savedMs, true);
+    }
+
+    public void setSlowReverse() {
+        if (originalFile == null) {
+            statusMessage.set("No hay video cargado");
+            return;
+        }
+        if (usingReversedMedia || pendingReverseActivation) {
+            setRate(-0.25);
+            return;
+        }
+        long savedMs = capturePlayerPlaybackMs();
+        directionSwitchAnchorMs = savedMs;
+        timeMs.set(savedMs);
+        rate.set(-0.25);
+        userWantsPlayback = true;
+        requestReversedPlayback(true, savedMs);
+    }
+
+    public void setSlowForward() {
+        if (originalFile == null) {
+            statusMessage.set("No hay video cargado");
+            return;
+        }
+        if (!usingReversedMedia) {
+            if (pendingReverseActivation) {
+                pendingReverseActivation = false;
+                if (!preparingReverse.get()) {
+                    hideReverseBadge();
+                }
+            }
+            setRate(0.25);
+            return;
+        }
+        long savedMs = capturePlayerPlaybackMs();
+        directionSwitchAnchorMs = savedMs;
+        timeMs.set(savedMs);
+        pendingReverseActivation = false;
+        rate.set(0.25);
+        userWantsPlayback = true;
+        switchToOriginalKeepingTime(savedMs, true);
+    }
+
+    public boolean isUsingReversedMedia() {
+        return usingReversedMedia;
+    }
+
+    /**
+     * Speed within current direction; always resumes playback. Does not switch files.
+     */
+    public void setRate(double newRate) {
+        double magnitude = Math.abs(sanitizeRate(newRate));
+        userWantsPlayback = true;
+        if (usingReversedMedia) {
+            rate.set(-magnitude);
+            mediaPlayer.controls().setRate((float) magnitude);
+            mediaPlayer.controls().play();
+            playing.set(true);
+            statusMessage.set(String.format("Reversa %.2fx", -magnitude));
+            return;
+        }
+        rate.set(magnitude);
+        mediaPlayer.controls().setRate((float) magnitude);
+        mediaPlayer.controls().play();
+        playing.set(true);
+        statusMessage.set(String.format("Velocidad: %.2fx", magnitude));
+    }
+
+    private long capturePlayerPlaybackMs() {
+        mediaPlayer.controls().pause();
+        playing.set(false);
+        long mediaTime = mediaPlayer.status().time();
+        if (mediaTime < 0) {
+            mediaTime = 0;
+        }
+        long original = toOriginalTime(mediaTime);
+        return clampToOriginalTimeline(original);
+    }
+
+    private void requestReversedPlayback(boolean resumePlayback, long atOriginalTime) {
+        if (FfmpegProxyService.findFfmpeg().isEmpty()) {
             statusMessage.set("FFmpeg no encontrado. Instálalo para reversa suave (brew install ffmpeg).");
             rate.set(Math.abs(rate.get()));
             return;
         }
-
         userWantsPlayback = resumePlayback;
+        directionSwitchAnchorMs = atOriginalTime;
+        timeMs.set(atOriginalTime);
 
-        if (reversedFile != null) {
-            try {
-                if (reverseService.hasValidCache(originalFile.toPath())) {
-                    awaitingReverseOverlay.set(false);
-                    activateReversed(reversedFile, timeMs.get(), resumePlayback);
-                    return;
-                }
-            } catch (IOException ignored) {
-                // Fall through.
+        try {
+            if (proxyService.hasValidCache(originalFile.toPath(), FfmpegProxyService.ProxyKind.REVERSE)) {
+                reversedFile = proxyService.cacheFileFor(originalFile.toPath(), FfmpegProxyService.ProxyKind.REVERSE);
+                hideReverseBadge();
+                activateReversed(atOriginalTime, resumePlayback);
+                return;
             }
+        } catch (IOException ignored) {
+            // Fall through.
         }
 
-        // Not ready yet: keep forward playback, show overlay only now.
         pendingReverseActivation = true;
-        awaitingReverseOverlay.set(true);
-        if (!preparingReverse.get()) {
-            startReversePrefetch(generation.get());
-        }
-        statusMessage.set("Reversa en preparación… se activará al terminar");
+        preparingReverse.set(true);
+        showReverseBadge("Preparando reversa…");
+        proxyService.enqueueReverse(originalFile.toPath(), true);
     }
 
-    private void activateReversed(Path reversed, long originalTime, boolean resumePlayback) {
-        awaitingReverseOverlay.set(false);
+    private void activateReversed(long originalTime, boolean resumePlayback) {
+        if (reversedFile == null) {
+            return;
+        }
         pendingReverseActivation = false;
-        loadMediaAtOriginalTime(reversed.toAbsolutePath().toString(), originalTime, true, resumePlayback);
         if (rate.get() >= 0) {
             rate.set(-1.0);
         }
-        double abs = Math.abs(rate.get());
-        mediaPlayer.controls().setRate((float) abs);
+        loadMediaAtOriginalTime(
+                reversedFile.toAbsolutePath().toString(),
+                originalTime,
+                true,
+                resumePlayback
+        );
+        mediaPlayer.controls().setRate((float) Math.abs(rate.get()));
         if (resumePlayback) {
             statusMessage.set(String.format("Reversa %.2fx", rate.get()));
         } else {
@@ -421,24 +577,25 @@ public class MediaService implements AutoCloseable {
         }
     }
 
-    private void switchToOriginalIfNeeded(long originalTime, boolean resumePlayback) {
-        if (!usingReversedMedia) {
-            if (resumePlayback) {
-                mediaPlayer.controls().play();
-                playing.set(true);
-            }
-            return;
-        }
+    private void switchToOriginalKeepingTime(long originalTime, boolean resumePlayback) {
         if (originalFile == null) {
             return;
         }
-        loadMediaAtOriginalTime(originalFile.getAbsolutePath(), originalTime, false, resumePlayback);
-        statusMessage.set(resumePlayback ? "Reproduciendo" : "Pausa");
+        if (rate.get() < 0) {
+            rate.set(1.0);
+        }
+        loadMediaAtOriginalTime(
+                originalFile.getAbsolutePath(),
+                originalTime,
+                false,
+                resumePlayback
+        );
+        mediaPlayer.controls().setRate((float) Math.abs(rate.get()));
+        statusMessage.set(resumePlayback
+                ? String.format("Velocidad: %.2fx", Math.abs(rate.get()))
+                : "Pausa");
     }
 
-    /**
-     * Switches MRL while ignoring spurious finished/stopped events, and seeks using original timeline.
-     */
     private void loadMediaAtOriginalTime(
             String mrl,
             long originalTime,
@@ -448,7 +605,7 @@ public class MediaService implements AutoCloseable {
         boolean previousReversed = usingReversedMedia;
         switchingMedia.set(true);
         usingReversedMedia = reversed;
-        long length = Math.max(originalLengthMs, lengthMs.get());
+        long length = originalTimelineLength();
         long clamped = Math.max(0, length > 0 ? Math.min(originalTime, length) : originalTime);
         double startSeconds = reversed
                 ? Math.max(0, (length - clamped) / 1000.0)
@@ -470,6 +627,7 @@ public class MediaService implements AutoCloseable {
         timeMs.set(clamped);
         mediaPlayer.controls().setTime(toMediaTime(clamped));
         seeking.set(false);
+        mediaPlayer.controls().setRate((float) Math.abs(rate.get()));
 
         if (resumePlayback) {
             userWantsPlayback = true;
@@ -485,44 +643,43 @@ public class MediaService implements AutoCloseable {
             switchingMedia.set(false);
             seeking.set(true);
             mediaPlayer.controls().setTime(toMediaTime(timeMs.get()));
+            mediaPlayer.controls().setRate((float) Math.abs(rate.get()));
             seeking.set(false);
         });
-    }
-
-    private void applyPositiveRate(double positiveRate, boolean resumePlayback) {
-        double clamped = Math.abs(sanitizeRate(positiveRate));
-        rate.set(clamped);
-        mediaPlayer.controls().setRate((float) clamped);
-        if (resumePlayback) {
-            userWantsPlayback = true;
-            if (!mediaPlayer.status().isPlaying()) {
-                mediaPlayer.controls().play();
-            }
-            playing.set(true);
-        }
-        statusMessage.set(String.format("Velocidad: %.2fx", clamped));
     }
 
     private long toOriginalTime(long mediaTime) {
         if (!usingReversedMedia) {
             return mediaTime;
         }
-        long length = Math.max(originalLengthMs, lengthMs.get());
-        if (length <= 0) {
+        long orig = originalTimelineLength();
+        if (orig <= 0) {
             return mediaTime;
         }
-        return Math.max(0, length - mediaTime);
+        return Math.max(0, orig - Math.max(0, mediaTime));
     }
 
     private long toMediaTime(long originalTime) {
         if (!usingReversedMedia) {
             return originalTime;
         }
-        long length = Math.max(originalLengthMs, lengthMs.get());
-        if (length <= 0) {
+        long orig = originalTimelineLength();
+        if (orig <= 0) {
             return originalTime;
         }
-        return Math.max(0, length - originalTime);
+        return Math.max(0, orig - Math.max(0, Math.min(originalTime, orig)));
+    }
+
+    private long originalTimelineLength() {
+        return Math.max(originalLengthMs, lengthMs.get());
+    }
+
+    private long clampToOriginalTimeline(long originalMs) {
+        long length = originalTimelineLength();
+        if (length > 0) {
+            return Math.max(0, Math.min(originalMs, length));
+        }
+        return Math.max(0, originalMs);
     }
 
     private static double sanitizeRate(double value) {
@@ -531,6 +688,43 @@ public class MediaService implements AutoCloseable {
             return Math.copySign(0.05, clamped >= 0 ? 1 : -1);
         }
         return clamped;
+    }
+
+    private void showReverseBadge(String text) {
+        reverseBadgeText.set(text != null && !text.isBlank() ? text : "Preparando reversa…");
+        reverseBadgeVisible.set(true);
+    }
+
+    private void hideReverseBadge() {
+        reverseBadgeVisible.set(false);
+    }
+
+    private void bumpPlaylistInfo() {
+        bumpPlaylistInfo(false);
+    }
+
+    private void bumpPlaylistInfo(boolean force) {
+        long now = System.currentTimeMillis();
+        if (!force && now - lastPlaylistInfoBumpMs < 250) {
+            return;
+        }
+        lastPlaylistInfoBumpMs = now;
+        playlistInfoEpoch.set(playlistInfoEpoch.get() + 1);
+    }
+
+    private static String formatClock(long ms) {
+        if (ms < 0) {
+            ms = 0;
+        }
+        long totalSec = ms / 1000;
+        long h = totalSec / 3600;
+        long m = (totalSec % 3600) / 60;
+        long s = totalSec % 60;
+        long millis = ms % 1000;
+        if (h > 0) {
+            return String.format("%d:%02d:%02d.%03d", h, m, s, millis);
+        }
+        return String.format("%02d:%02d.%03d", m, s, millis);
     }
 
     public void setVolume(int value) {
@@ -568,8 +762,12 @@ public class MediaService implements AutoCloseable {
         return preparingReverse;
     }
 
-    public BooleanProperty awaitingReverseOverlayProperty() {
-        return awaitingReverseOverlay;
+    public BooleanProperty reverseBadgeVisibleProperty() {
+        return reverseBadgeVisible;
+    }
+
+    public StringProperty reverseBadgeTextProperty() {
+        return reverseBadgeText;
     }
 
     public LongProperty timeMsProperty() {
@@ -600,16 +798,33 @@ public class MediaService implements AutoCloseable {
         return playing.get();
     }
 
+    public void clearCacheForFile(File file) {
+        if (file == null) {
+            return;
+        }
+        proxyService.clearCacheFor(file.toPath());
+        try {
+            if (reversedFile != null
+                    && originalFile != null
+                    && originalFile.toPath().toAbsolutePath().normalize()
+                    .equals(file.toPath().toAbsolutePath().normalize())) {
+                reversedFile = null;
+            }
+        } catch (Exception ignored) {
+            reversedFile = null;
+        }
+        bumpPlaylistInfo(true);
+    }
+
     @Override
     public void close() {
         userWantsPlayback = false;
-        reverseService.cancelCurrent();
         preparingReverse.set(false);
-        awaitingReverseOverlay.set(false);
+        hideReverseBadge();
         mediaPlayer.controls().stop();
         mediaPlayer.release();
         factory.release();
-        reverseService.close();
+        proxyService.close();
     }
 
     private static String missingVlcMessage() {

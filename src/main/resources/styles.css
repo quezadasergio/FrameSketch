@@ -107,6 +107,29 @@
     -fx-background-radius: 6;
 }
 
+.color-palette-grid {
+    -fx-padding: 0;
+}
+
+.color-swatch {
+    -fx-background-color: #1c2330;
+    -fx-background-radius: 6;
+    -fx-border-color: #2e3748;
+    -fx-border-radius: 6;
+    -fx-padding: 4;
+    -fx-alignment: center;
+}
+
+.color-swatch:hover {
+    -fx-border-color: #94a3b8;
+}
+
+.color-swatch:selected {
+    -fx-border-color: #38bdf8;
+    -fx-border-width: 2;
+    -fx-background-color: #243044;
+}
+
 .list-cell {
     -fx-text-fill: #d5deea;
     -fx-background-color: transparent;
@@ -141,17 +164,8 @@
     -fx-padding: 0 12 0 12;
 }
 
-.reverse-spinner-badge {
-    -fx-background-color: rgba(8, 12, 20, 0.78);
-    -fx-background-radius: 10;
-    -fx-padding: 10 12 8 12;
-}
-
-.reverse-spinner {
-    -fx-progress-color: #38bdf8;
-}
-
-.reverse-spinner-label {
-    -fx-text-fill: #dbe7f5;
-    -fx-font-size: 10px;
+.reverse-progress-label {
+    -fx-text-fill: #7dd3fc;
+    -fx-font-size: 12px;
+    -fx-font-family: "SF Mono", "Menlo", "Consolas", monospace;
 }

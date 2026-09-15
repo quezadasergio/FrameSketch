@@ -6,7 +6,7 @@ Desktop app for video playback and sports play analysis — draw, write, and ann
 
 - **Java 25** (JDK or JRE)
 - **VLC** installed on the system (libVLC), **same architecture as the JDK** (on Apple Silicon use arm64 VLC, not the Intel/x86_64 build). FrameSketch uses [VLCJ](https://github.com/caprica/vlcj); the fat JAR bundles Java dependencies, not VLC native binaries.
-- **FFmpeg** (for smooth reverse playback). On macOS: `brew install ffmpeg`. Optional: `FRAMESKETCH_FFMPEG=/path/to/ffmpeg`.
+- **FFmpeg** (reversed-clip cache for smooth reverse). On macOS: `brew install ffmpeg`. Optional: `FRAMESKETCH_FFMPEG=/path/to/ffmpeg`.
 
 ### macOS (Homebrew)
 
@@ -53,20 +53,17 @@ Run:
 java --enable-native-access=ALL-UNNAMED -jar build/libs/FrameSketch-1.0.0-all.jar
 ```
 
-You can copy the JAR to another machine **with the same OS/architecture for the JavaFX natives from this build**, plus Java 25 and VLC installed.
+You can copy the JAR to another machine **with the same OS/architecture for the JavaFX natives from this build**, plus Java 25, VLC, and FFmpeg installed.
 
 ## Features
 
 - Playback of popular formats via VLC (MP4, MKV, AVI, MOV, WebM, and more)
-- Controls with Material Design 2 icons (Ikonli) and tooltips (player and playlist)
-- Timeline **keyframes** (add with button, `K`, Shift+click, or double-click; drag; delete with right-click / Delete / Backspace; jump with `A` / `S`)
-- **A/B markers** (buttons or keys `1` / `2`), draggable, with Δt and speed calculation `v = distance / Δt`
-- Immediate rate control. On **open**, FFmpeg prepares a reversed clip in the background (status text below). A loading ring on the video appears **only if you request reverse before the cache is ready**; when done, reverse starts at the same timeline point (`duration − t`)
-- Volume + mute
-- 5-second splash screen with credit `Application made by quezadasergio`
-- Playlist modes: single, sequence, repeat one, repeat all
-- On-video annotation: draw, text, color, stroke width, jitter, undo, clear all (no confirmation)
-- Annotations are tied to the video time at which they were created
+- On **add to playlist** / open, FFmpeg queues **fully reversed clips**; progress shows next to controls as `name  time=HH:MM:SS.xx`
+- **M** / **N** switch direction with a shared time anchor (pressing the same mode again is a no-op)
+- **V** / **B** slow motion (0.25x) in reverse / forward
+- Playlist hover tooltip: total duration + reverse conversion status
+- Controls with Material Design 2 icons (Ikonli) and tooltips
+- Timeline **keyframes**, **A/B markers**, annotations on video
 
 ### Keyboard shortcuts
 
@@ -77,8 +74,10 @@ You can copy the JAR to another machine **with the same OS/architecture for the 
 | `C` | Go to start |
 | `V` | Slow motion reverse |
 | `B` | Slow motion forward |
-| `N` | 1x |
-| `M` | Reverse playback |
+| `N` | Forward 1x (switch from reverse) |
+| `M` | Reverse 1x (switch from forward) |
+| `W` | Undo last annotation |
+| `Q` | Clear all annotations |
 | `A` / `S` | Previous / next keyframe |
 | `K` | Add keyframe |
 | `1` / `2` | Marker A / B |
@@ -86,5 +85,5 @@ You can copy the JAR to another machine **with the same OS/architecture for the 
 
 ## Notes
 
-- Smooth reverse uses an FFmpeg-generated cached clip; the first preparation for a file can take a while on long videos.
+- Smooth reverse uses an FFmpeg-generated reversed clip; first preparation can take a while. Cache: `framesketch-proxy-cache` in the system temp directory (cleared when the app closes, or when a clip is removed from the playlist).
 - Switching clips in the playlist clears annotations, keyframes, and markers.

@@ -81,7 +81,7 @@ public class PlayerControls extends VBox {
         );
         Button addKf = IconButtons.iconButton(
                 MaterialDesignF.FLAG_PLUS,
-                "Añadir keyframe (K). También: Shift+clic o doble clic en la timeline.",
+                "Añadir keyframe. También: Shift+clic o doble clic en la timeline (K)",
                 this::addKeyframeAtPlayhead
         );
         Button markerA = IconButtons.iconButton(
@@ -97,22 +97,22 @@ public class PlayerControls extends VBox {
         Button slowBack = IconButtons.iconButton(
                 MaterialDesignR.REWIND,
                 "Cámara lenta atrás 0.25x (V)",
-                () -> setRateFromUi(-0.25)
+                this::slowReverseFromUi
         );
         Button slowFwd = IconButtons.iconButton(
                 MaterialDesignF.FAST_FORWARD,
                 "Cámara lenta adelante 0.25x (B)",
-                () -> setRateFromUi(0.25)
+                this::slowForwardFromUi
         );
         Button normal = IconButtons.iconButton(
                 MaterialDesignP.PLAY_SPEED,
-                "Velocidad normal 1x (N)",
-                () -> setRateFromUi(1.0)
+                "Adelante 1x — cambia a original solo si estás en reversa (N)",
+                this::switchToForwardFromUi
         );
         Button reverse = IconButtons.iconButton(
                 MaterialDesignR.REWIND_OUTLINE,
-                "Reproducción atrás (M) — usa clip invertido en caché (se prepara al abrir el video)",
-                () -> setRateFromUi(-1.0)
+                "Reversa 1x — cambia a clip invertido solo si estás en adelante (M)",
+                this::switchToReverseFromUi
         );
 
         HBox transport = new HBox(
@@ -131,7 +131,7 @@ public class PlayerControls extends VBox {
         speedSlider.setShowTickLabels(true);
         speedSlider.setBlockIncrement(0.05);
         speedSlider.setPrefWidth(200);
-        speedSlider.setTooltip(new Tooltip("Negativo = reversa suave vía FFmpeg (caché). Cambio inmediato."));
+        speedSlider.setTooltip(new Tooltip("Velocidad dentro del modo actual. M = reversa, N = adelante (cambian de archivo)."));
 
         Label speedValue = new Label("1.00x");
         speedValue.setMinWidth(52);
@@ -140,14 +140,23 @@ public class PlayerControls extends VBox {
             if (updatingSpeedSlider) {
                 return;
             }
-            double rate = sanitizeRate(speedSlider.getValue());
-            media.setRate(rate);
-            speedValue.setText(String.format("%.2fx", rate));
+            setSpeedWithinMode(sanitizeRate(speedSlider.getValue()));
+            speedValue.setText(String.format("%.2fx", media.rateProperty().get()));
         };
         speedSlider.valueProperty().addListener((obs, o, n) -> applySpeed.run());
         speedSlider.valueChangingProperty().addListener((obs, was, changing) -> {
             // Apply continuously while dragging and once more when released.
             applySpeed.run();
+        });
+
+        media.rateProperty().addListener((obs, o, n) -> {
+            if (updatingSpeedSlider) {
+                return;
+            }
+            updatingSpeedSlider = true;
+            speedSlider.setValue(Math.max(-1.0, Math.min(1.0, n.doubleValue())));
+            updatingSpeedSlider = false;
+            speedValue.setText(String.format("%.2fx", n.doubleValue()));
         });
 
         muteIcon = IconButtons.icon(MaterialDesignV.VOLUME_HIGH, 18);
@@ -175,7 +184,14 @@ public class PlayerControls extends VBox {
         status.getStyleClass().add("status-label");
         status.textProperty().bind(media.statusMessageProperty());
 
-        HBox speedRow = new HBox(8, speedLabel, speedSlider, speedValue, muteBtn, volumeSlider, status);
+        Label reverseProgress = new Label();
+        reverseProgress.getStyleClass().add("reverse-progress-label");
+        reverseProgress.textProperty().bind(media.reverseBadgeTextProperty());
+        reverseProgress.visibleProperty().bind(media.reverseBadgeVisibleProperty());
+        reverseProgress.managedProperty().bind(media.reverseBadgeVisibleProperty());
+        reverseProgress.setMinWidth(120);
+
+        HBox speedRow = new HBox(8, speedLabel, speedSlider, speedValue, muteBtn, volumeSlider, reverseProgress, status);
         speedRow.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(status, Priority.ALWAYS);
 
@@ -237,11 +253,46 @@ public class PlayerControls extends VBox {
     }
 
     public void setRateFromUi(double rate) {
+        setSpeedWithinMode(rate);
+    }
+
+    /** Slider: speed only within current mode; always plays. */
+    public void setSpeedWithinMode(double rate) {
         double sanitized = sanitizeRate(rate);
+        boolean reverseMode = media.isUsingReversedMedia();
+        double signed = reverseMode ? -Math.abs(sanitized) : Math.abs(sanitized);
         updatingSpeedSlider = true;
-        speedSlider.setValue(Math.max(-1.0, Math.min(1.0, sanitized)));
+        speedSlider.setValue(Math.max(-1.0, Math.min(1.0, signed)));
         updatingSpeedSlider = false;
-        media.setRate(sanitized);
+        media.setRate(signed);
+    }
+
+    public void slowReverseFromUi() {
+        updatingSpeedSlider = true;
+        speedSlider.setValue(-0.25);
+        updatingSpeedSlider = false;
+        media.setSlowReverse();
+    }
+
+    public void slowForwardFromUi() {
+        updatingSpeedSlider = true;
+        speedSlider.setValue(0.25);
+        updatingSpeedSlider = false;
+        media.setSlowForward();
+    }
+
+    public void switchToReverseFromUi() {
+        updatingSpeedSlider = true;
+        speedSlider.setValue(-1.0);
+        updatingSpeedSlider = false;
+        media.switchToReversePlayback();
+    }
+
+    public void switchToForwardFromUi() {
+        updatingSpeedSlider = true;
+        speedSlider.setValue(1.0);
+        updatingSpeedSlider = false;
+        media.switchToForwardPlayback();
     }
 
     public void deleteSelectedKeyframe() {

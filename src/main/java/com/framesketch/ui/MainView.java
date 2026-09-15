@@ -11,13 +11,11 @@ import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
-import javafx.scene.control.ProgressIndicator;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.StackPane;
-import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 import java.io.File;
@@ -72,29 +70,6 @@ public class MainView {
         videoStack.setMinSize(320, 180);
         BorderPane.setMargin(videoStack, new Insets(8, 0, 0, 0));
 
-        ProgressIndicator reverseSpinner = new ProgressIndicator();
-        reverseSpinner.setMaxSize(36, 36);
-        reverseSpinner.getStyleClass().add("reverse-spinner");
-        reverseSpinner.setMouseTransparent(true);
-        reverseSpinner.visibleProperty().bind(mediaService.awaitingReverseOverlayProperty());
-        reverseSpinner.managedProperty().bind(mediaService.awaitingReverseOverlayProperty());
-
-        Label reverseHint = new Label("Preparando reversa…");
-        reverseHint.getStyleClass().add("reverse-spinner-label");
-        reverseHint.setMouseTransparent(true);
-        reverseHint.visibleProperty().bind(mediaService.awaitingReverseOverlayProperty());
-        reverseHint.managedProperty().bind(mediaService.awaitingReverseOverlayProperty());
-
-        VBox reverseBadge = new VBox(4, reverseSpinner, reverseHint);
-        reverseBadge.setAlignment(Pos.CENTER);
-        reverseBadge.getStyleClass().add("reverse-spinner-badge");
-        reverseBadge.setMouseTransparent(true);
-        reverseBadge.visibleProperty().bind(mediaService.awaitingReverseOverlayProperty());
-        reverseBadge.managedProperty().bind(mediaService.awaitingReverseOverlayProperty());
-        StackPane.setAlignment(reverseBadge, Pos.BOTTOM_RIGHT);
-        StackPane.setMargin(reverseBadge, new Insets(0, 14, 14, 0));
-        videoStack.getChildren().add(reverseBadge);
-
         videoStack.layoutBoundsProperty().addListener((obs, o, bounds) -> fitVideoSurface());
         videoView.fitWidthProperty().bind(videoStack.widthProperty());
         videoView.fitHeightProperty().bind(videoStack.heightProperty());
@@ -123,7 +98,12 @@ public class MainView {
                 }
         );
 
-        PlaylistPanel playlistPanel = new PlaylistPanel(playlist, stage, this::playFile);
+        PlaylistPanel playlistPanel = new PlaylistPanel(
+                playlist,
+                stage,
+                this::playFile,
+                mediaService
+        );
         playerControls = new PlayerControls(mediaService);
 
         Label brand = new Label("FrameSketch");
@@ -170,13 +150,25 @@ public class MainView {
             case Z -> mediaService.togglePlayPause();
             case X -> mediaService.stop();
             case C -> mediaService.rewindToStart();
-            case V -> playerControls.setRateFromUi(-0.25);
-            case B -> playerControls.setRateFromUi(0.25);
-            case N -> playerControls.setRateFromUi(1.0);
-            case M -> playerControls.setRateFromUi(-1.0);
+            case V -> playerControls.slowReverseFromUi();
+            case B -> playerControls.slowForwardFromUi();
+            case N -> playerControls.switchToForwardFromUi();
+            case M -> playerControls.switchToReverseFromUi();
             case A -> playerControls.jumpToPreviousKeyframe();
             case S -> playerControls.jumpToNextKeyframe();
             case K -> playerControls.addKeyframeAtPlayhead();
+            case W -> {
+                annotationModel.undo();
+                if (annotationCanvas != null) {
+                    annotationCanvas.redraw();
+                }
+            }
+            case Q -> {
+                annotationModel.clear();
+                if (annotationCanvas != null) {
+                    annotationCanvas.redraw();
+                }
+            }
             case DIGIT1, NUMPAD1 -> playerControls.placeMarkerA();
             case DIGIT2, NUMPAD2 -> playerControls.placeMarkerB();
             case DELETE, BACK_SPACE -> playerControls.deleteSelectedKeyframe();
