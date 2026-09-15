@@ -1,0 +1,171 @@
+.root-pane {
+    -fx-background-color: linear-gradient(to bottom, #1a1f2b 0%, #12151c 55%, #0d1016 100%);
+    -fx-font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+}
+
+.brand {
+    -fx-text-fill: #f4f7fb;
+    -fx-font-size: 28px;
+    -fx-font-weight: 700;
+    -fx-font-family: "Avenir Next Condensed", "DIN Alternate", "Segoe UI Semibold", sans-serif;
+    -fx-letter-spacing: 0.5px;
+}
+
+.section-title {
+    -fx-text-fill: #e8eef7;
+    -fx-font-size: 15px;
+    -fx-font-weight: 700;
+}
+
+.video-stack {
+    -fx-background-color: #05070b;
+    -fx-border-color: rgba(255, 255, 255, 0.08);
+    -fx-border-width: 0 1 0 1;
+}
+
+.annotation-toolbar, .playlist-panel, .player-controls {
+    -fx-background-color: rgba(18, 22, 30, 0.92);
+}
+
+.annotation-toolbar, .playlist-panel {
+    -fx-border-color: rgba(255, 255, 255, 0.06);
+}
+
+.label {
+    -fx-text-fill: #c9d3e2;
+}
+
+.hint {
+    -fx-text-fill: #8b97a8;
+    -fx-font-size: 11px;
+}
+
+.time-label, .status-label {
+    -fx-text-fill: #9fb0c5;
+    -fx-font-size: 12px;
+}
+
+.button, .toggle-button {
+    -fx-background-color: #2a3345;
+    -fx-text-fill: #f2f6fb;
+    -fx-background-radius: 6;
+    -fx-padding: 7 12 7 12;
+    -fx-cursor: hand;
+}
+
+.icon-button {
+    -fx-background-color: #2a3345;
+    -fx-background-radius: 6;
+    -fx-padding: 8 10 8 10;
+    -fx-cursor: hand;
+    -fx-min-width: 36;
+    -fx-min-height: 34;
+}
+
+.icon-button:hover {
+    -fx-background-color: #36425a;
+}
+
+.control-icon {
+    -fx-icon-color: #f2f6fb;
+}
+
+.timeline-view {
+    -fx-background-color: transparent;
+}
+
+.metric-label {
+    -fx-text-fill: #dbe7f5;
+    -fx-font-size: 12px;
+    -fx-font-weight: 600;
+}
+
+.metrics-row .text-field {
+    -fx-pref-height: 28;
+}
+
+.button:hover, .toggle-button:hover {
+    -fx-background-color: #36425a;
+}
+
+.toggle-button:selected {
+    -fx-background-color: #c45c26;
+}
+
+.button.danger {
+    -fx-background-color: #7a1f2b;
+}
+
+.button.danger:hover {
+    -fx-background-color: #9a2836;
+}
+
+.combo-box, .color-picker, .list-view, .text-field {
+    -fx-background-color: #1c2330;
+    -fx-control-inner-background: #1c2330;
+    -fx-text-fill: #e8eef7;
+    -fx-background-radius: 6;
+}
+
+.color-palette-grid {
+    -fx-padding: 0;
+}
+
+.color-swatch {
+    -fx-background-color: #1c2330;
+    -fx-background-radius: 6;
+    -fx-border-color: #2e3748;
+    -fx-border-radius: 6;
+    -fx-padding: 4;
+    -fx-alignment: center;
+}
+
+.color-swatch:hover {
+    -fx-border-color: #94a3b8;
+}
+
+.color-swatch:selected {
+    -fx-border-color: #38bdf8;
+    -fx-border-width: 2;
+    -fx-background-color: #243044;
+}
+
+.list-cell {
+    -fx-text-fill: #d5deea;
+    -fx-background-color: transparent;
+}
+
+.list-cell:filled:selected, .list-cell.current-track {
+    -fx-background-color: #c45c26;
+    -fx-text-fill: white;
+}
+
+.slider .track {
+    -fx-background-color: #2e3748;
+}
+
+.slider .thumb {
+    -fx-background-color: #e8eef7;
+}
+
+.check-box {
+    -fx-text-fill: #c9d3e2;
+}
+
+.splash-root {
+    -fx-background-color: transparent;
+}
+
+.splash-credit {
+    -fx-text-fill: #f8fafc;
+    -fx-font-size: 13px;
+    -fx-font-weight: 600;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.85), 8, 0.4, 0, 1);
+    -fx-padding: 0 12 0 12;
+}
+
+.reverse-progress-label {
+    -fx-text-fill: #7dd3fc;
+    -fx-font-size: 12px;
+    -fx-font-family: "SF Mono", "Menlo", "Consolas", monospace;
+}
