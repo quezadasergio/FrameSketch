@@ -963,7 +963,9 @@ public class MediaService implements AutoCloseable {
     private static String missingVlcMessage() {
         return """
                 No se pudo cargar libVLC.
-                Instala VLC desde https://www.videolan.org/ (misma arquitectura que el JDK: arm64 o x64)
-                y vuelve a abrir FrameSketch.""";
+                Instala VLC desde https://www.videolan.org/ (misma arquitectura: arm64 o x64).
+                macOS: brew install --cask vlc
+                Windows: winget install VideoLAN.VLC
+                Luego vuelve a abrir FrameSketch.""";
     }
 }

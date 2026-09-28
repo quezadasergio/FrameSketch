@@ -155,6 +155,7 @@ public final class FfmpegProxyService implements AutoCloseable {
         if (override != null && !override.isBlank()) {
             candidates.add(override.trim());
         }
+        addBundledCandidates(candidates, "ffmpeg");
         candidates.add("ffmpeg");
         candidates.add("/opt/homebrew/bin/ffmpeg");
         candidates.add("/usr/local/bin/ffmpeg");
@@ -168,37 +169,20 @@ public final class FfmpegProxyService implements AutoCloseable {
         return Optional.empty();
     }
 
-    private static boolean isUsable(String binary) {
-        try {
-            Path path = Path.of(binary);
-            if (path.isAbsolute() && (!Files.isRegularFile(path) || !Files.isExecutable(path))) {
-                return false;
-            }
-            Process process = new ProcessBuilder(binary, "-version")
-                    .redirectErrorStream(true)
-                    .start();
-            boolean finished = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                return false;
-            }
-            return process.exitValue() == 0;
-        } catch (Exception ex) {
-            return false;
-        }
-    }
-
     public static Optional<String> findFfprobe() {
         List<String> candidates = new ArrayList<>();
         String override = System.getenv("FRAMESKETCH_FFPROBE");
         if (override != null && !override.isBlank()) {
             candidates.add(override.trim());
         }
+        addBundledCandidates(candidates, "ffprobe");
         Optional<String> ffmpeg = findFfmpeg();
         if (ffmpeg.isPresent()) {
             Path ffmpegPath = Path.of(ffmpeg.get());
             if (ffmpegPath.getParent() != null) {
-                candidates.add(ffmpegPath.getParent().resolve("ffprobe").toString());
+                boolean windows = isWindows();
+                String probe = windows ? "ffprobe.exe" : "ffprobe";
+                candidates.add(ffmpegPath.getParent().resolve(probe).toString());
             }
         }
         candidates.add("ffprobe");
@@ -212,6 +196,56 @@ public final class FfmpegProxyService implements AutoCloseable {
             }
         }
         return Optional.empty();
+    }
+
+    private static void addBundledCandidates(List<String> candidates, String unixName) {
+        String exe = isWindows() ? unixName + ".exe" : unixName;
+        Path javaHome = Path.of(System.getProperty("java.home", "."));
+        candidates.add(javaHome.resolve("../ffmpeg").resolve(exe).normalize().toString());
+        candidates.add(javaHome.resolve("../../ffmpeg").resolve(exe).normalize().toString());
+        candidates.add(javaHome.resolve("../../../ffmpeg").resolve(exe).normalize().toString());
+        try {
+            var source = FfmpegProxyService.class.getProtectionDomain().getCodeSource();
+            if (source != null && source.getLocation() != null) {
+                Path jar = Path.of(source.getLocation().toURI());
+                Path jarDir = jar.getParent();
+                if (jarDir != null) {
+                    candidates.add(jarDir.resolve("../ffmpeg").resolve(exe).normalize().toString());
+                    candidates.add(jarDir.resolve("ffmpeg").resolve(exe).normalize().toString());
+                }
+            }
+        } catch (Exception ignored) {
+            // Fall through to PATH / Homebrew.
+        }
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    private static boolean isUsable(String binary) {
+        try {
+            Path path = Path.of(binary);
+            if (path.isAbsolute()) {
+                if (!Files.isRegularFile(path)) {
+                    return false;
+                }
+                if (!isWindows() && !Files.isExecutable(path)) {
+                    return false;
+                }
+            }
+            Process process = new ProcessBuilder(binary, "-version")
+                    .redirectErrorStream(true)
+                    .start();
+            boolean finished = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                return false;
+            }
+            return process.exitValue() == 0;
+        } catch (Exception ex) {
+            return false;
+        }
     }
 
     public Path cacheFileFor(Path source, ProxyKind kind) throws IOException {

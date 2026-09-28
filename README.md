@@ -4,9 +4,9 @@ Desktop app for video playback and sports play analysis — draw, write, and ann
 
 ## Requirements
 
-- **Java 25** (JDK or JRE)
-- **VLC** installed on the system (libVLC), **same architecture as the JDK** (on Apple Silicon use arm64 VLC, not the Intel/x86_64 build). FrameSketch uses [VLCJ](https://github.com/caprica/vlcj); the fat JAR bundles Java dependencies, not VLC native binaries.
-- **FFmpeg** (reversed-clip cache for smooth reverse). On macOS: `brew install ffmpeg`. Optional: `FRAMESKETCH_FFMPEG=/path/to/ffmpeg`.
+- **Java 25** (JDK) for development and for building installers
+- **VLC** installed on the system (libVLC), **same architecture as the app** (on Apple Silicon use arm64 VLC, not the Intel/x86_64 build). FrameSketch uses [VLCJ](https://github.com/caprica/vlcj). Native installers **do not bundle VLC**; the app asks you to install it if it is missing.
+- **FFmpeg** (and **ffprobe**) for development. Native installers **bundle a portable FFmpeg**, so end users do not need to install it. Optional override: `FRAMESKETCH_FFMPEG=/path/to/ffmpeg`.
 
 ### macOS (Homebrew)
 
@@ -31,10 +31,50 @@ Confirm libVLC is arm64 on Apple Silicon:
 file /Applications/VLC.app/Contents/MacOS/lib/libvlccore.dylib
 ```
 
+### Windows
+
+Install **Java 25**, **VLC**, and **FFmpeg** (FFmpeg is only required for `gradlew run` / development; the `.exe` installer already includes it).
+
+With [winget](https://learn.microsoft.com/windows/package-manager/winget/):
+
+```bat
+winget install Microsoft.OpenJDK.25
+winget install VideoLAN.VLC
+winget install Gyan.FFmpeg
+```
+
+Alternatively with Chocolatey:
+
+```bat
+choco install temurin25
+choco install vlc
+choco install ffmpeg
+```
+
+Or download manually:
+
+- Java 25: https://adoptium.net/ or https://learn.microsoft.com/java/openjdk/download
+- VLC: https://www.videolan.org/vlc/ (match x64 vs ARM with your JDK)
+- FFmpeg: https://www.gyan.dev/ffmpeg/builds/ or https://github.com/BtbN/FFmpeg-Builds/releases — add `ffmpeg.exe` and `ffprobe.exe` to `PATH`
+
+After installing, open a **new** terminal and check:
+
+```bat
+java -version
+vlc --version
+ffmpeg -version
+```
+
 ## Run in development
 
 ```bash
 ./gradlew run
+```
+
+Windows:
+
+```bat
+gradlew.bat run
 ```
 
 ## Fat JAR
@@ -50,17 +90,40 @@ Output: `build/libs/FrameSketch-1.0.0-all.jar`
 Run:
 
 ```bash
-java --enable-native-access=ALL-UNNAMED -jar build/libs/FrameSketch-1.0.0-all.jar
+java --enable-native-access=ALL-UNNAMED --enable-native-access=javafx.graphics --sun-misc-unsafe-memory-access=allow -jar build/libs/FrameSketch-1.0.0-all.jar
 ```
 
 You can copy the JAR to another machine **with the same OS/architecture for the JavaFX natives from this build**, plus Java 25, VLC, and FFmpeg installed.
 
+## Native installers (Mac and Windows)
+
+These tasks call `jpackage` (JDK 25) and **copy a portable FFmpeg/ffprobe into the app**. **VLC is not copied**; users must install VLC themselves.
+
+Build on the **target OS** (a Mac `.dmg` cannot be built on Windows, and a Windows `.exe` cannot be built on a Mac).
+
+```bash
+# Current OS:
+./gradlew packageApp
+
+# macOS only (creates a .dmg):
+./gradlew packageMac
+
+# Windows only (creates a .exe installer; needs [WiX Toolset 3](https://wixtoolset.org/)):
+gradlew.bat packageWin
+```
+
+Output goes to `build/dist/`.
+
+Optional: put your own `ffmpeg` / `ffprobe` (or `ffmpeg.exe` / `ffprobe.exe`) in `packaging/ffmpeg-prebuilt/` to skip the download from [BtbN FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases).
+
+The packaged app still shows a message if VLC is missing.
+
 ## Features
 
 - Playback of popular formats via VLC (MP4, MKV, AVI, MOV, WebM, and more)
-- On **add to playlist** / open, FFmpeg queues **fully reversed clips**; progress shows next to controls as `name  time=HH:MM:SS.xx`
+- On **add to playlist** / open, FFmpeg queues **forward and reversed H.264 proxies**; progress shows next to controls as `name  time=HH:MM:SS.xx`
 - **M** / **N** switch direction with a shared time anchor (pressing the same mode again is a no-op)
-- **V** / **B** slow motion (0.25x) in reverse / forward
+- **V** / **B** slow motion (0.50x) in reverse / forward
 - Playlist hover tooltip: total duration + reverse conversion status
 - Controls with Material Design 2 icons (Ikonli) and tooltips
 - Timeline **keyframes**, **A/B markers**, annotations on video
@@ -85,5 +148,5 @@ You can copy the JAR to another machine **with the same OS/architecture for the 
 
 ## Notes
 
-- Smooth reverse uses an FFmpeg-generated reversed clip; first preparation can take a while. Cache: `framesketch-proxy-cache` in the system temp directory (cleared when the app closes, or when a clip is removed from the playlist).
+- Smooth reverse (and reliable forward after reverse) uses FFmpeg-generated clips; first preparation can take a while. Cache: `framesketch-proxy-cache` in the system temp directory (cleared when the app closes, or when a clip is removed from the playlist).
 - Switching clips in the playlist clears annotations, keyframes, and markers.
