@@ -56,14 +56,19 @@
 .icon-button {
     -fx-background-color: #2a3345;
     -fx-background-radius: 6;
-    -fx-padding: 8 10 8 10;
+    -fx-padding: 8;
     -fx-cursor: hand;
     -fx-min-width: 36;
-    -fx-min-height: 34;
+    -fx-min-height: 36;
 }
 
 .icon-button:hover {
     -fx-background-color: #36425a;
+}
+
+.annotation-toolbar .icon-button {
+    -fx-alignment: center;
+    -fx-content-display: graphic-only;
 }
 
 .control-icon {
@@ -168,4 +173,59 @@
     -fx-text-fill: #7dd3fc;
     -fx-font-size: 12px;
     -fx-font-family: "SF Mono", "Menlo", "Consolas", monospace;
+}
+
+.dialog-pane.text-annotation-dialog {
+    -fx-background-color: #12151c;
+    -fx-padding: 12;
+}
+
+.dialog-pane.text-annotation-dialog > .content {
+    -fx-background-color: #12151c;
+    -fx-padding: 0;
+}
+
+.dialog-pane.text-annotation-dialog > .button-bar > .container {
+    -fx-background-color: #12151c;
+    -fx-padding: 10 0 0 0;
+}
+
+.dialog-pane.text-annotation-dialog .label {
+    -fx-text-fill: #c9d3e2;
+}
+
+.dialog-pane.text-annotation-dialog .text-field {
+    -fx-background-color: #1c2330;
+    -fx-control-inner-background: #1c2330;
+    -fx-text-fill: #e8eef7;
+    -fx-prompt-text-fill: #8b97a8;
+    -fx-highlight-fill: #c45c26;
+    -fx-highlight-text-fill: #f2f6fb;
+    -fx-background-radius: 6;
+    -fx-padding: 6 8 6 8;
+}
+
+.dialog-pane.text-annotation-dialog .spinner {
+    -fx-background-color: #1c2330;
+    -fx-background-radius: 6;
+}
+
+.dialog-pane.text-annotation-dialog .spinner .text-field {
+    -fx-background-color: transparent;
+    -fx-padding: 4 6 4 6;
+}
+
+.dialog-pane.text-annotation-dialog .spinner .increment-arrow-button,
+.dialog-pane.text-annotation-dialog .spinner .decrement-arrow-button {
+    -fx-background-color: #2a3345;
+}
+
+.dialog-pane.text-annotation-dialog .spinner .increment-arrow-button:hover,
+.dialog-pane.text-annotation-dialog .spinner .decrement-arrow-button:hover {
+    -fx-background-color: #36425a;
+}
+
+.dialog-pane.text-annotation-dialog .spinner .increment-arrow,
+.dialog-pane.text-annotation-dialog .spinner .decrement-arrow {
+    -fx-background-color: #f2f6fb;
 }

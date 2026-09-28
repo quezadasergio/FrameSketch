@@ -65,7 +65,8 @@ public final class FfmpegProxyService implements AutoCloseable {
     public record FileStatus(
             OptionalLong durationMs,
             ReverseStatus reverseStatus,
-            Optional<String> reverseProgressTime
+            Optional<String> reverseProgressTime,
+            boolean forwardReady
     ) {
     }
 
@@ -105,8 +106,13 @@ public final class FfmpegProxyService implements AutoCloseable {
     };
     private Consumer<Exception> reverseFailedListener = e -> {
     };
+    private Consumer<ProxyJobResult> compatCompletedListener = r -> {
+    };
+    private Consumer<Exception> compatFailedListener = e -> {
+    };
     private Consumer<Path> statusChangedListener = p -> {
     };
+    private final java.util.Set<Path> compatInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public FfmpegProxyService() throws IOException {
         cacheDir = Path.of(System.getProperty("java.io.tmpdir"), "framesketch-proxy-cache");
@@ -125,6 +131,16 @@ public final class FfmpegProxyService implements AutoCloseable {
 
     public void setReverseFailedListener(Consumer<Exception> listener) {
         this.reverseFailedListener = listener != null ? listener : e -> {
+        };
+    }
+
+    public void setCompatCompletedListener(Consumer<ProxyJobResult> listener) {
+        this.compatCompletedListener = listener != null ? listener : r -> {
+        };
+    }
+
+    public void setCompatFailedListener(Consumer<Exception> listener) {
+        this.compatFailedListener = listener != null ? listener : e -> {
         };
     }
 
@@ -241,7 +257,13 @@ public final class FfmpegProxyService implements AutoCloseable {
         } catch (IOException ex) {
             reverseStatus = ReverseStatus.PENDING;
         }
-        return new FileStatus(duration, reverseStatus, progress);
+        boolean forwardReady = false;
+        try {
+            forwardReady = hasValidCache(absolute, ProxyKind.COMPAT);
+        } catch (IOException ignored) {
+            forwardReady = false;
+        }
+        return new FileStatus(duration, reverseStatus, progress, forwardReady);
     }
 
     public void rememberDurationMs(Path source, long durationMs) {
@@ -389,8 +411,45 @@ public final class FfmpegProxyService implements AutoCloseable {
         for (Path source : sources) {
             if (source != null) {
                 enqueueReverse(source, false);
+                enqueueCompat(source);
             }
         }
+    }
+
+    /**
+     * Encodes a forward-playback H.264 proxy if missing.
+     */
+    public void enqueueCompat(Path source) {
+        Objects.requireNonNull(source, "source");
+        if (findFfmpeg().isEmpty()) {
+            return;
+        }
+        Path absolute = source.toAbsolutePath().normalize();
+        probeDurationAsync(absolute);
+        try {
+            if (hasValidCache(absolute, ProxyKind.COMPAT)) {
+                compatCompletedListener.accept(new ProxyJobResult(
+                        cacheFileFor(absolute, ProxyKind.COMPAT), ProxyKind.COMPAT, absolute));
+                statusChangedListener.accept(absolute);
+                return;
+            }
+        } catch (IOException ex) {
+            compatFailedListener.accept(ex);
+            statusChangedListener.accept(absolute);
+            return;
+        }
+        if (!compatInFlight.add(absolute)) {
+            return;
+        }
+        prepareCompatAsync(absolute, result -> {
+            compatInFlight.remove(absolute);
+            compatCompletedListener.accept(result);
+            statusChangedListener.accept(absolute);
+        }, error -> {
+            compatInFlight.remove(absolute);
+            compatFailedListener.accept(error);
+            statusChangedListener.accept(absolute);
+        });
     }
 
     /**
@@ -555,7 +614,9 @@ public final class FfmpegProxyService implements AutoCloseable {
         command.add("-c:v");
         command.add("libx264");
         command.add("-preset");
-        command.add(kind == ProxyKind.REVERSE ? "ultrafast" : "veryfast");
+        command.add("ultrafast");
+        command.add("-g");
+        command.add("30");
         command.add("-crf");
         command.add("23");
         command.add("-pix_fmt");
@@ -663,6 +724,7 @@ public final class FfmpegProxyService implements AutoCloseable {
         durationCacheMs.remove(absolute);
         reverseProgressBySource.remove(absolute);
         reverseStatusOverride.remove(absolute);
+        compatInFlight.remove(absolute);
         statusChangedListener.accept(absolute);
     }
 
@@ -690,6 +752,7 @@ public final class FfmpegProxyService implements AutoCloseable {
         durationCacheMs.clear();
         reverseProgressBySource.clear();
         reverseStatusOverride.clear();
+        compatInFlight.clear();
     }
 
     private record ReverseJob(Path source) {

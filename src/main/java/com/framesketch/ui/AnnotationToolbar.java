@@ -6,6 +6,7 @@ import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ColorPicker;
+import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
 import javafx.scene.control.ToggleButton;
@@ -19,6 +20,13 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
+import org.kordamp.ikonli.Ikon;
+import org.kordamp.ikonli.materialdesign2.MaterialDesignC;
+import org.kordamp.ikonli.materialdesign2.MaterialDesignD;
+import org.kordamp.ikonli.materialdesign2.MaterialDesignF;
+import org.kordamp.ikonli.materialdesign2.MaterialDesignP;
+import org.kordamp.ikonli.materialdesign2.MaterialDesignS;
+import org.kordamp.ikonli.materialdesign2.MaterialDesignU;
 
 public class AnnotationToolbar extends VBox {
 
@@ -46,25 +54,44 @@ public class AnnotationToolbar extends VBox {
         title.getStyleClass().add("section-title");
 
         ToggleGroup tools = new ToggleGroup();
-        ToggleButton drawBtn = new ToggleButton("Dibujar");
-        ToggleButton textBtn = new ToggleButton("Texto");
-        drawBtn.setToggleGroup(tools);
-        textBtn.setToggleGroup(tools);
+        ToggleButton drawBtn = toolButton(
+                MaterialDesignP.PENCIL,
+                "Dibujar a mano alzada",
+                AnnotationModel.Tool.DRAW,
+                model,
+                tools
+        );
+        ToggleButton rectBtn = toolButton(
+                MaterialDesignS.SQUARE_OUTLINE,
+                "Rectángulo",
+                AnnotationModel.Tool.RECTANGLE,
+                model,
+                tools
+        );
+        ToggleButton ellipseBtn = toolButton(
+                MaterialDesignC.CIRCLE_OUTLINE,
+                "Elipse",
+                AnnotationModel.Tool.ELLIPSE,
+                model,
+                tools
+        );
+        ToggleButton textBtn = toolButton(
+                MaterialDesignF.FORM_TEXTBOX,
+                "Texto",
+                AnnotationModel.Tool.TEXT,
+                model,
+                tools
+        );
         drawBtn.setSelected(true);
-        drawBtn.setMaxWidth(Double.MAX_VALUE);
-        textBtn.setMaxWidth(Double.MAX_VALUE);
-        HBox.setHgrow(drawBtn, Priority.ALWAYS);
-        HBox.setHgrow(textBtn, Priority.ALWAYS);
 
-        drawBtn.setOnAction(e -> model.setTool(AnnotationModel.Tool.DRAW));
-        textBtn.setOnAction(e -> model.setTool(AnnotationModel.Tool.TEXT));
         tools.selectedToggleProperty().addListener((obs, old, selected) -> {
             if (selected == null && old != null) {
                 old.setSelected(true);
             }
         });
 
-        HBox toolRow = new HBox(8, drawBtn, textBtn);
+        HBox toolRow = new HBox(6, drawBtn, rectBtn, ellipseBtn, textBtn);
+        makeEqualSquares(drawBtn, rectBtn, ellipseBtn, textBtn);
 
         Label colorLabel = new Label("Color");
         GridPane colorGrid = buildVerticalColorPalette(model);
@@ -95,16 +122,20 @@ public class AnnotationToolbar extends VBox {
         model.jitterAmplitudeProperty().bindBidirectional(jitterSlider.valueProperty());
         jitterSlider.disableProperty().bind(jitterBox.selectedProperty().not());
 
-        Button undoBtn = new Button("Deshacer");
-        undoBtn.setMaxWidth(Double.MAX_VALUE);
-        undoBtn.setOnAction(e -> onUndo.run());
-        undoBtn.setTooltip(new Tooltip("Deshacer el último trazo o texto (W)"));
-
-        Button clearBtn = new Button("Quitar todo");
+        Button undoBtn = IconButtons.iconButton(
+                MaterialDesignU.UNDO,
+                "Deshacer el último trazo o texto (W)",
+                onUndo
+        );
+        Button clearBtn = IconButtons.iconButton(
+                MaterialDesignD.DELETE_SWEEP,
+                "Elimina todas las anotaciones de inmediato (Q)",
+                onClear
+        );
         clearBtn.getStyleClass().add("danger");
-        clearBtn.setMaxWidth(Double.MAX_VALUE);
-        clearBtn.setOnAction(e -> onClear.run());
-        clearBtn.setTooltip(new Tooltip("Elimina todas las anotaciones de inmediato (Q)"));
+
+        HBox actionRow = new HBox(6, undoBtn, clearBtn);
+        matchSquareSize(drawBtn, undoBtn, clearBtn);
 
         Label hint = new Label("Las anotaciones quedan ligadas al tiempo del video en el que se crean.");
         hint.getStyleClass().add("hint");
@@ -126,12 +157,48 @@ public class AnnotationToolbar extends VBox {
                 jitterBox,
                 jitterLabel,
                 jitterSlider,
-                undoBtn,
-                clearBtn,
+                actionRow,
                 spacer,
                 hint
         );
         setAlignment(Pos.TOP_LEFT);
+    }
+
+    private static ToggleButton toolButton(
+            Ikon ikon,
+            String tooltip,
+            AnnotationModel.Tool tool,
+            AnnotationModel model,
+            ToggleGroup group
+    ) {
+        ToggleButton button = IconButtons.iconToggleButton(ikon, tooltip);
+        button.setToggleGroup(group);
+        button.setOnAction(e -> model.setTool(tool));
+        return button;
+    }
+
+    private static void makeEqualSquares(Region... nodes) {
+        for (Region node : nodes) {
+            node.setMaxWidth(Double.MAX_VALUE);
+            HBox.setHgrow(node, Priority.ALWAYS);
+            node.widthProperty().addListener((obs, o, n) -> {
+                double size = n.doubleValue();
+                node.setMinHeight(size);
+                node.setPrefHeight(size);
+                node.setMaxHeight(size);
+            });
+        }
+    }
+
+    private static void matchSquareSize(Region source, Region... targets) {
+        source.widthProperty().addListener((obs, o, n) -> {
+            double size = n.doubleValue();
+            for (Region target : targets) {
+                target.setMinSize(size, size);
+                target.setPrefSize(size, size);
+                target.setMaxSize(size, size);
+            }
+        });
     }
 
     private static GridPane buildVerticalColorPalette(AnnotationModel model) {
@@ -157,6 +224,7 @@ public class AnnotationToolbar extends VBox {
             fill.setArcWidth(4);
             fill.setArcHeight(4);
             swatch.setGraphic(fill);
+            swatch.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
             swatch.setTooltip(new Tooltip(toHex(color)));
             swatch.setOnAction(e -> model.colorProperty().set(color));
             if (colorsClose(model.getColor(), color)) {

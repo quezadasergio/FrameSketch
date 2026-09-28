@@ -18,6 +18,8 @@ public class AnnotationModel {
 
     public enum Tool {
         DRAW,
+        RECTANGLE,
+        ELLIPSE,
         TEXT
     }
 
@@ -27,6 +29,7 @@ public class AnnotationModel {
     private final ObjectProperty<Tool> tool = new SimpleObjectProperty<>(Tool.DRAW);
     private final ObjectProperty<Color> color = new SimpleObjectProperty<>(Color.web("#E11D48"));
     private final DoubleProperty strokeWidth = new SimpleDoubleProperty(4.0);
+    private final DoubleProperty textSize = new SimpleDoubleProperty(24);
     private final BooleanProperty jitterEnabled = new SimpleBooleanProperty(false);
     private final DoubleProperty jitterAmplitude = new SimpleDoubleProperty(2.5);
 
@@ -63,6 +66,18 @@ public class AnnotationModel {
 
     public double getStrokeWidth() {
         return strokeWidth.get();
+    }
+
+    public DoubleProperty textSizeProperty() {
+        return textSize;
+    }
+
+    public double getTextSize() {
+        return textSize.get();
+    }
+
+    public void setTextSize(double value) {
+        textSize.set(value);
     }
 
     public BooleanProperty jitterEnabledProperty() {
