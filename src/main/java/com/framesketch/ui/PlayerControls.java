@@ -96,30 +96,30 @@ public class PlayerControls extends VBox {
         );
         Button slowBack = IconButtons.iconButton(
                 MaterialDesignR.REWIND,
-                "Cámara lenta atrás 0.25x (V)",
+                "Cámara lenta atrás 0.50x (V)",
                 this::slowReverseFromUi
         );
         Button slowFwd = IconButtons.iconButton(
                 MaterialDesignF.FAST_FORWARD,
-                "Cámara lenta adelante 0.25x (B)",
+                "Cámara lenta adelante 0.50x (B)",
                 this::slowForwardFromUi
-        );
-        Button normal = IconButtons.iconButton(
-                MaterialDesignP.PLAY_SPEED,
-                "Adelante 1x — cambia a original solo si estás en reversa (N)",
-                this::switchToForwardFromUi
         );
         Button reverse = IconButtons.iconButton(
                 MaterialDesignR.REWIND_OUTLINE,
                 "Reversa 1x — cambia a clip invertido solo si estás en adelante (M)",
                 this::switchToReverseFromUi
         );
+        Button goForward = IconButtons.iconButton(
+                MaterialDesignA.ARROW_RIGHT_BOLD,
+                "Reproducción hacia adelante 1x (N). K está reservada para añadir keyframe",
+                this::switchToForwardFromUi
+        );
 
         HBox transport = new HBox(
                 6,
                 prevKf, playPause, stop, rewind, nextKf,
                 addKf, markerA, markerB,
-                slowBack, slowFwd, normal, reverse
+                slowBack, slowFwd, reverse, goForward
         );
         transport.setAlignment(Pos.CENTER_LEFT);
 
@@ -131,7 +131,9 @@ public class PlayerControls extends VBox {
         speedSlider.setShowTickLabels(true);
         speedSlider.setBlockIncrement(0.05);
         speedSlider.setPrefWidth(200);
-        speedSlider.setTooltip(new Tooltip("Velocidad dentro del modo actual. M = reversa, N = adelante (cambian de archivo)."));
+        speedSlider.setTooltip(new Tooltip(
+                "Velocidad con signo: positivo = adelante, negativo = reversa, 0 = pausa. Cruza 0 para cambiar de dirección."
+        ));
 
         Label speedValue = new Label("1.00x");
         speedValue.setMinWidth(52);
@@ -140,8 +142,8 @@ public class PlayerControls extends VBox {
             if (updatingSpeedSlider) {
                 return;
             }
-            setSpeedWithinMode(sanitizeRate(speedSlider.getValue()));
-            speedValue.setText(String.format("%.2fx", media.rateProperty().get()));
+            media.setRate(sanitizeRate(speedSlider.getValue()));
+            speedValue.setText(formatRate(media.rateProperty().get()));
         };
         speedSlider.valueProperty().addListener((obs, o, n) -> applySpeed.run());
         speedSlider.valueChangingProperty().addListener((obs, was, changing) -> {
@@ -156,7 +158,7 @@ public class PlayerControls extends VBox {
             updatingSpeedSlider = true;
             speedSlider.setValue(Math.max(-1.0, Math.min(1.0, n.doubleValue())));
             updatingSpeedSlider = false;
-            speedValue.setText(String.format("%.2fx", n.doubleValue()));
+            speedValue.setText(formatRate(n.doubleValue()));
         });
 
         muteIcon = IconButtons.icon(MaterialDesignV.VOLUME_HIGH, 18);
@@ -253,30 +255,19 @@ public class PlayerControls extends VBox {
     }
 
     public void setRateFromUi(double rate) {
-        setSpeedWithinMode(rate);
-    }
-
-    /** Slider: speed only within current mode; always plays. */
-    public void setSpeedWithinMode(double rate) {
-        double sanitized = sanitizeRate(rate);
-        boolean reverseMode = media.isUsingReversedMedia();
-        double signed = reverseMode ? -Math.abs(sanitized) : Math.abs(sanitized);
-        updatingSpeedSlider = true;
-        speedSlider.setValue(Math.max(-1.0, Math.min(1.0, signed)));
-        updatingSpeedSlider = false;
-        media.setRate(signed);
+        media.setRate(rate);
     }
 
     public void slowReverseFromUi() {
         updatingSpeedSlider = true;
-        speedSlider.setValue(-0.25);
+        speedSlider.setValue(-MediaService.SLOW_MOTION_RATE);
         updatingSpeedSlider = false;
         media.setSlowReverse();
     }
 
     public void slowForwardFromUi() {
         updatingSpeedSlider = true;
-        speedSlider.setValue(0.25);
+        speedSlider.setValue(MediaService.SLOW_MOTION_RATE);
         updatingSpeedSlider = false;
         media.setSlowForward();
     }
@@ -322,10 +313,14 @@ public class PlayerControls extends VBox {
     }
 
     private static double sanitizeRate(double rate) {
-        if (Math.abs(rate) < 0.05) {
-            return Math.copySign(0.05, rate >= 0 ? 1 : -1);
+        if (Math.abs(rate) < 0.03) {
+            return 0;
         }
-        return rate;
+        return Math.max(-1.0, Math.min(1.0, rate));
+    }
+
+    private static String formatRate(double rate) {
+        return String.format("%+.2fx", rate);
     }
 
     private static String formatTime(long ms) {

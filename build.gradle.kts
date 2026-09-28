@@ -37,7 +37,9 @@ application {
 
 tasks.named<JavaExec>("run") {
     jvmArgs = listOf(
-        "--enable-native-access=ALL-UNNAMED"
+        "--enable-native-access=ALL-UNNAMED",
+        "--enable-native-access=javafx.graphics",
+        "--sun-misc-unsafe-memory-access=allow"
     )
 }
 
